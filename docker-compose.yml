@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   rabbitmq:
     image: rabbitmq:3.12-management
@@ -11,6 +9,13 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    networks:
+      - cluster
 
   rabbitmq-exporter:
     image: kbudde/rabbitmq-exporter
@@ -19,6 +24,11 @@ services:
       - "9419:9419"
     environment:
       RABBIT_URL: http://guest:guest@rabbitmq:15672
+    depends_on:
+      rabbitmq: 
+        condition: service_healthy
+    networks:
+      - cluster
 
   prometheus:
     image: prom/prometheus
@@ -27,12 +37,69 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"
+    networks:
+      - cluster
 
   grafana:
     image: grafana/grafana
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - cluster
+
+  mongo:
+    image: mongo:latest
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: ${DATABASE_NAME}
+    networks:
+      - cluster
+
+  api:
+    build:
+      context: .
+    image: tecnologias-emergentes-001-api:latest
+    container_name: api
+    ports:
+      - "4040:3000"
+    depends_on:
+      - mongo
+      - rabbitmq
+    environment:
+      DATABASE: mongodb://mongo:27017/${DATABASE_NAME}
+      JWTSECRET: ${JWTSECRET}
+      JWTEXPIRE: ${JWTEXPIRE}
+      RABBITMQ: amqp://rabbitmq:5672
+      SERVER: ${SERVER}
+    env_file:
+      - .env
+    networks:
+      - cluster
+
+  consumer:
+    build:
+      context: .
+    image: tecnologias-emergentes-002-consumer:latest
+    container_name: consumer
+    depends_on:
+      rabbitmq: 
+        condition: service_healthy
+    environment:
+      RABBITMQ: amqp://rabbitmq:5672
+      MAX_RETRIES: 5
+    networks:
+      - cluster
+
+volumes:
+  mongo-data:
+
+networks:
+  cluster:
